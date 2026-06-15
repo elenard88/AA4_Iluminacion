@@ -694,7 +694,7 @@ void main() {
 		//Cargo Modelo
 		models.push_back(LoadOBJModel("Assets/Models/troll.obj"));
 		models.push_back(LoadOBJModel("Assets/Models/rock.obj"));
-		models.push_back(LoadOBJModel("Assets/Models/palm.obj"));
+		models.push_back(LoadOBJModel("Assets/Models/tree.obj"));
 
 		//Compìlar programa
 		compiledPrograms.push_back(CreateProgram(myFirstProgram));
@@ -705,7 +705,7 @@ void main() {
 		//Cargo texturas
 		textures.push_back(LoadTexture("Assets/Textures/troll.png"));
 		textures.push_back(LoadTexture("Assets/Textures/rock.png"));
-		textures.push_back(LoadTexture("Assets/Textures/palm.png"));
+		textures.push_back(LoadTexture("Assets/Textures/tree.png"));
 
 		//Genero objetos de escena
 		GenerateSceneObjects();
