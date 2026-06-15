@@ -11,11 +11,13 @@
 #include <ctime>
 #include <cstdlib>
 #include <stb_image.h>
+#include <cmath>
 #include "Model.h"
 
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 1024
 
+// Camara
 const float YAW = -90.f;
 const float PITCH = -8.f;
 const float SPEED = 4.f;
@@ -26,6 +28,24 @@ const float CAMERA_MAX_PITCH = 89.f;
 
 const float FIRST_MOUSE_X = WINDOW_WIDTH * 0.5f;
 const float FIRST_MOUSE_Y = WINDOW_HEIGHT * 0.5f;
+
+// Dia y noche
+const float DAY_NIGHT_CYCLE_DURATION = 20.f;
+const float ORBIT_RADIUS = 8.f;
+const float ORBIT_Z = 0.f;
+
+const float SUN_MOON_SEPARATION_DEGREES = 180.f;
+const float FULL_ORBIT_DEGREES = 360.f;
+
+const float MIN_DIFFUSE_LIGHT = 0.15f;
+
+const float LIGHT_OBJECT_SCALE = 0.25f;
+
+const glm::vec3 SUN_COLOR = glm::vec3(1.f, 0.9f, 0.35f);
+const glm::vec3 MOON_COLOR = glm::vec3(0.35f, 0.45f, 1.f);
+
+const glm::vec3 DAY_AMBIENT_COLOR = glm::vec3(0.45f, 0.38f, 0.2f);
+const glm::vec3 NIGHT_AMBIENT_COLOR = glm::vec3(0.03f, 0.05f, 0.16f);
 
 struct ShaderProgram {
 	GLuint vertexShader = 0;
@@ -68,6 +88,16 @@ struct Camera {
 	bool FirstMouseInput = true;
 };
 
+struct DayNightCycle {
+	glm::vec3 sunPosition = glm::vec3(0.f);
+	glm::vec3 moonPosition = glm::vec3(0.f);
+
+	glm::vec3 ambientColor = NIGHT_AMBIENT_COLOR;
+
+	float sunEnabled = 0.f;
+	float moonEnabled = 0.f;
+};
+
 std::vector<GLuint> compiledPrograms;
 std::vector<Model> models;
 std::vector<GLuint> textures;
@@ -77,6 +107,8 @@ Camera camera;
 
 float deltaTime = 0.f;
 float lastFrameTime = 0.f;
+
+DayNightCycle dayNightCycle;
 
 const unsigned int MODEL_TROLL = 0;
 const unsigned int MODEL_ROCK = 1;
@@ -349,6 +381,94 @@ void Mouse_Callback(GLFWwindow* window, double mouseX, double mouseY) {
 	camera.LastMouseY = static_cast<float>(mouseY);
 
 	ProcessMouseMovement(xOffset, yOffset);
+}
+
+//Funcion que calcula la posicion orbital de un astro
+glm::vec3 CalculateOrbitPosition(float orbitDegrees) {
+
+	float orbitRadians = glm::radians(orbitDegrees);
+
+	float xPosition = cos(orbitRadians) * ORBIT_RADIUS;
+	float yPosition = sin(orbitRadians) * ORBIT_RADIUS;
+
+	return glm::vec3(xPosition, yPosition, ORBIT_Z);
+}
+
+//Funcion que actualiza el ciclo de dia y noche
+void UpdateDayNightCycle() {
+
+	float currentTime = static_cast<float>(glfwGetTime());
+	float cycleTime = std::fmod(currentTime, DAY_NIGHT_CYCLE_DURATION);
+	float cycleNormalized = cycleTime / DAY_NIGHT_CYCLE_DURATION;
+
+	float sunOrbitDegrees = cycleNormalized * FULL_ORBIT_DEGREES;
+	float moonOrbitDegrees = sunOrbitDegrees + SUN_MOON_SEPARATION_DEGREES;
+
+	dayNightCycle.sunPosition = CalculateOrbitPosition(sunOrbitDegrees);
+	dayNightCycle.moonPosition = CalculateOrbitPosition(moonOrbitDegrees);
+
+	if (dayNightCycle.sunPosition.y > 0.f) {
+		dayNightCycle.sunEnabled = 1.f;
+	}
+	else {
+		dayNightCycle.sunEnabled = 0.f;
+	}
+
+	if (dayNightCycle.moonPosition.y > 0.f) {
+		dayNightCycle.moonEnabled = 1.f;
+	}
+	else {
+		dayNightCycle.moonEnabled = 0.f;
+	}
+
+	float dayFactor = dayNightCycle.sunPosition.y / ORBIT_RADIUS;
+
+	if (dayFactor < 0.f) {
+		dayFactor = 0.f;
+	}
+
+	if (dayFactor > 1.f) {
+		dayFactor = 1.f;
+	}
+
+	dayNightCycle.ambientColor = NIGHT_AMBIENT_COLOR + ((DAY_AMBIENT_COLOR - NIGHT_AMBIENT_COLOR) * dayFactor);
+}
+
+//Funcion que pasa los valores del ciclo dia y noche al shader
+void SendDayNightCycleToShader(GLuint program) {
+
+	glUniform3fv(glGetUniformLocation(program, "sunPosition"), 1, glm::value_ptr(dayNightCycle.sunPosition));
+	glUniform3fv(glGetUniformLocation(program, "moonPosition"), 1, glm::value_ptr(dayNightCycle.moonPosition));
+
+	glUniform3fv(glGetUniformLocation(program, "sunColor"), 1, glm::value_ptr(SUN_COLOR));
+	glUniform3fv(glGetUniformLocation(program, "moonColor"), 1, glm::value_ptr(MOON_COLOR));
+	glUniform3fv(glGetUniformLocation(program, "ambientColor"), 1, glm::value_ptr(dayNightCycle.ambientColor));
+
+	glUniform1f(glGetUniformLocation(program, "sunEnabled"), dayNightCycle.sunEnabled);
+	glUniform1f(glGetUniformLocation(program, "moonEnabled"), dayNightCycle.moonEnabled);
+	glUniform1f(glGetUniformLocation(program, "minimumDiffuseLight"), MIN_DIFFUSE_LIGHT);
+}
+
+//Funcion que renderiza un objeto usando las matrices del shader
+void RenderObject(
+	const Model& model,
+	const glm::vec3& position,
+	const glm::vec3& rotation,
+	const glm::vec3& scale,
+	GLint translationMatrixReference,
+	GLint rotationMatrixReference,
+	GLint scaleMatrixReference
+) {
+
+	glm::mat4 translationMatrix = glm::translate(glm::mat4(1.f), position);
+	glm::mat4 rotationMatrix = GenerateRotationMatrix(rotation);
+	glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.f), scale);
+
+	glUniformMatrix4fv(translationMatrixReference, 1, GL_FALSE, glm::value_ptr(translationMatrix));
+	glUniformMatrix4fv(rotationMatrixReference, 1, GL_FALSE, glm::value_ptr(rotationMatrix));
+	glUniformMatrix4fv(scaleMatrixReference, 1, GL_FALSE, glm::value_ptr(scaleMatrix));
+
+	model.Render();
 }
 
 //Carga una textura y devuelve su id
@@ -680,7 +800,7 @@ void main() {
 	//Indicamos lado del culling
 	glEnable(GL_DEPTH_TEST);
 
-	
+
 
 	//Inicializamos GLEW y controlamos errores
 	if (glewInit() == GLEW_OK) {
@@ -719,11 +839,6 @@ void main() {
 		//Indicar a la tarjeta GPU que programa debe usar
 		glUseProgram(compiledPrograms[0]);
 
-		//Definir la matriz de traslacion, rotacion y escalado
-		glm::mat4 translationMatrix = glm::translate(glm::mat4(1.f), glm::vec3(0.f));
-		glm::mat4 rotationMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.0f), glm::vec3(0.f, 1.f, 0.f));
-		glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.f), glm::vec3(1.f));
-
 		UpdateCameraVectors();
 
 		//Definir la matriz de vista
@@ -744,6 +859,9 @@ void main() {
 		GLint scaleMatrixReference = glGetUniformLocation(compiledPrograms[0], "scaleMatrix");
 		GLint viewReference = glGetUniformLocation(compiledPrograms[0], "view");
 		GLint projectionReference = glGetUniformLocation(compiledPrograms[0], "projection");
+
+		GLint renderLightObjectReference = glGetUniformLocation(compiledPrograms[0], "renderLightObject");
+		GLint objectColorReference = glGetUniformLocation(compiledPrograms[0], "objectColor");
 
 		// Pasar las matrices
 		glUniformMatrix4fv(viewReference, 1, GL_FALSE, glm::value_ptr(view));
@@ -766,7 +884,11 @@ void main() {
 			//Actualizamos la matriz de vista
 			view = GetViewMatrix();
 			glUniformMatrix4fv(viewReference, 1, GL_FALSE, glm::value_ptr(view));
-			
+
+			//Actualizamos ciclo dia y noche
+			UpdateDayNightCycle();
+			SendDayNightCycleToShader(compiledPrograms[0]);
+
 			//Limpiamos los buffers
 			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
@@ -775,17 +897,26 @@ void main() {
 
 				const GameObject& gameObject = gameObjects[i];
 
-				glm::mat4 translationMatrix = glm::translate(glm::mat4(1.f), gameObject.position);
-				glm::mat4 rotationMatrix = GenerateRotationMatrix(gameObject.rotation);
-				glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.f), gameObject.scale);
-
-				glUniformMatrix4fv(translationMatrixReference, 1, GL_FALSE, glm::value_ptr(translationMatrix));
-				glUniformMatrix4fv(rotationMatrixReference, 1, GL_FALSE, glm::value_ptr(rotationMatrix));
-				glUniformMatrix4fv(scaleMatrixReference, 1, GL_FALSE, glm::value_ptr(scaleMatrix));
+				glUniform1i(renderLightObjectReference, 0);
 
 				glBindTexture(GL_TEXTURE_2D, textures[gameObject.textureIndex]);
 
-				models[gameObject.modelIndex].Render();
+				RenderObject(models[gameObject.modelIndex], gameObject.position, gameObject.rotation, gameObject.scale,
+					translationMatrixReference, rotationMatrixReference, scaleMatrixReference);
+
+				//Renderizo sol
+				glUniform1i(renderLightObjectReference, 1);
+				glUniform3fv(objectColorReference, 1, glm::value_ptr(SUN_COLOR));
+
+				RenderObject(models[MODEL_ROCK], dayNightCycle.sunPosition, glm::vec3(0.f), glm::vec3(LIGHT_OBJECT_SCALE),
+					translationMatrixReference, rotationMatrixReference, scaleMatrixReference);
+
+				//Renderizo luna
+				glUniform1i(renderLightObjectReference, 1);
+				glUniform3fv(objectColorReference, 1, glm::value_ptr(MOON_COLOR));
+
+				RenderObject(models[MODEL_ROCK], dayNightCycle.moonPosition, glm::vec3(0.f), glm::vec3(LIGHT_OBJECT_SCALE),
+					translationMatrixReference, rotationMatrixReference, scaleMatrixReference);
 			}
 
 			//Cambiamos buffers
