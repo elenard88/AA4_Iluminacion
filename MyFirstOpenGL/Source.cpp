@@ -13,8 +13,19 @@
 #include <stb_image.h>
 #include "Model.h"
 
-#define WINDOW_WIDTH 640
-#define WINDOW_HEIGHT 480
+#define WINDOW_WIDTH 1280
+#define WINDOW_HEIGHT 1024
+
+const float YAW = -90.f;
+const float PITCH = -8.f;
+const float SPEED = 4.f;
+const float SENSITIVITY = 0.1f;
+
+const float CAMERA_MIN_PITCH = -89.f;
+const float CAMERA_MAX_PITCH = 89.f;
+
+const float FIRST_MOUSE_X = WINDOW_WIDTH * 0.5f;
+const float FIRST_MOUSE_Y = WINDOW_HEIGHT * 0.5f;
 
 struct ShaderProgram {
 	GLuint vertexShader = 0;
@@ -31,10 +42,41 @@ struct GameObject {
 	glm::vec3 scale = glm::vec3(1.f);
 };
 
+enum Camera_Movement {
+	FORWARD,
+	BACKWARD,
+	LEFT,
+	RIGHT
+};
+
+struct Camera {
+	glm::vec3 Position = glm::vec3(0.f, 2.f, 12.f);
+	glm::vec3 Front = glm::vec3(0.f, 0.f, -1.f);
+	glm::vec3 Up = glm::vec3(0.f, 1.f, 0.f);
+	glm::vec3 Right = glm::vec3(1.f, 0.f, 0.f);
+	glm::vec3 WorldUp = glm::vec3(0.f, 1.f, 0.f);
+
+	float Yaw = YAW;
+	float Pitch = PITCH;
+
+	float MovementSpeed = SPEED;
+	float MouseSensitivity = SENSITIVITY;
+
+	float LastMouseX = FIRST_MOUSE_X;
+	float LastMouseY = FIRST_MOUSE_Y;
+
+	bool FirstMouseInput = true;
+};
+
 std::vector<GLuint> compiledPrograms;
 std::vector<Model> models;
 std::vector<GLuint> textures;
 std::vector<GameObject> gameObjects;
+
+Camera camera;
+
+float deltaTime = 0.f;
+float lastFrameTime = 0.f;
 
 const unsigned int MODEL_TROLL = 0;
 const unsigned int MODEL_ROCK = 1;
@@ -203,6 +245,110 @@ glm::mat4 GenerateRotationMatrix(const glm::vec3& rotation) {
 	rotationMatrix = glm::rotate(rotationMatrix, glm::radians(rotation.z), glm::vec3(0.f, 0.f, 1.f));
 
 	return rotationMatrix;
+}
+
+//Funcion que actualiza los vectores de direccion de la camara
+void UpdateCameraVectors() {
+
+	glm::vec3 front;
+
+	front.x = cos(glm::radians(camera.Yaw)) * cos(glm::radians(camera.Pitch));
+	front.y = sin(glm::radians(camera.Pitch));
+	front.z = sin(glm::radians(camera.Yaw)) * cos(glm::radians(camera.Pitch));
+
+	camera.Front = glm::normalize(front);
+	camera.Right = glm::normalize(glm::cross(camera.Front, camera.WorldUp));
+	camera.Up = glm::normalize(glm::cross(camera.Right, camera.Front));
+}
+
+//Funcion que devuelve la matriz de vista de la camara
+glm::mat4 GetViewMatrix() {
+
+	return glm::lookAt(camera.Position, camera.Position + camera.Front, camera.Up);
+}
+
+//Funcion que procesa movimiento de teclado de la camara
+void ProcessKeyboard(Camera_Movement direction) {
+
+	float velocity = camera.MovementSpeed * deltaTime;
+
+	if (direction == FORWARD) {
+		camera.Position += camera.Front * velocity;
+	}
+
+	if (direction == BACKWARD) {
+		camera.Position -= camera.Front * velocity;
+	}
+
+	if (direction == RIGHT) {
+		camera.Position += camera.Right * velocity;
+	}
+
+	if (direction == LEFT) {
+		camera.Position -= camera.Right * velocity;
+	}
+}
+
+//Funcion que procesa el movimiento del raton
+void ProcessMouseMovement(float xOffset, float yOffset) {
+
+	xOffset *= camera.MouseSensitivity;
+	yOffset *= camera.MouseSensitivity;
+
+	camera.Yaw += xOffset;
+	camera.Pitch += yOffset;
+
+	if (camera.Pitch > CAMERA_MAX_PITCH) {
+		camera.Pitch = CAMERA_MAX_PITCH;
+	}
+
+	if (camera.Pitch < CAMERA_MIN_PITCH) {
+		camera.Pitch = CAMERA_MIN_PITCH;
+	}
+
+	UpdateCameraVectors();
+}
+
+//Funcion que procesa inputs de teclado mediante GLFW
+void ProcessInput(GLFWwindow* window) {
+
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+		ProcessKeyboard(FORWARD);
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+		ProcessKeyboard(BACKWARD);
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+		ProcessKeyboard(LEFT);
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+		ProcessKeyboard(RIGHT);
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+		glfwSetWindowShouldClose(window, true);
+	}
+}
+
+//Funcion callback que procesa el movimiento del raton
+void Mouse_Callback(GLFWwindow* window, double mouseX, double mouseY) {
+
+	if (camera.FirstMouseInput) {
+		camera.LastMouseX = static_cast<float>(mouseX);
+		camera.LastMouseY = static_cast<float>(mouseY);
+		camera.FirstMouseInput = false;
+	}
+
+	float xOffset = static_cast<float>(mouseX) - camera.LastMouseX;
+	float yOffset = camera.LastMouseY - static_cast<float>(mouseY);
+
+	camera.LastMouseX = static_cast<float>(mouseX);
+	camera.LastMouseY = static_cast<float>(mouseY);
+
+	ProcessMouseMovement(xOffset, yOffset);
 }
 
 //Carga una textura y devuelve su id
@@ -513,6 +659,12 @@ void main() {
 	//Asignamos función de callback para cuando el frame buffer es modificado
 	glfwSetFramebufferSizeCallback(window, Resize_Window);
 
+	//Asignamos funcion de callback para el movimiento del raton
+	glfwSetCursorPosCallback(window, Mouse_Callback);
+
+	//Capturamos el cursor dentro de la ventana
+	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
 	//Definimos espacio de trabajo
 	glfwMakeContextCurrent(window);
 
@@ -572,8 +724,10 @@ void main() {
 		glm::mat4 rotationMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.0f), glm::vec3(0.f, 1.f, 0.f));
 		glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.f), glm::vec3(1.f));
 
-		// Definir la matriz de vista
-		glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 4.0f, 12.0f), glm::vec3(0.0f, 1.0f, 0.f), glm::vec3(0.0f, 1.0f, 0.0f));
+		UpdateCameraVectors();
+
+		//Definir la matriz de vista
+		glm::mat4 view = GetViewMatrix();
 
 		// Definir la matriz proyeccion
 		glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)WINDOW_WIDTH / (float)WINDOW_HEIGHT, 0.1f, 100.0f);
@@ -598,8 +752,20 @@ void main() {
 		//Generamos el game loop
 		while (!glfwWindowShouldClose(window)) {
 
+			//Calculamos delta time
+			float currentFrameTime = static_cast<float>(glfwGetTime());
+			deltaTime = currentFrameTime - lastFrameTime;
+			lastFrameTime = currentFrameTime;
+
 			//Pulleamos los eventos (botones, teclas, mouse...)
 			glfwPollEvents();
+
+			//Procesamos los inputs de camara
+			ProcessInput(window);
+
+			//Actualizamos la matriz de vista
+			view = GetViewMatrix();
+			glUniformMatrix4fv(viewReference, 1, GL_FALSE, glm::value_ptr(view));
 			
 			//Limpiamos los buffers
 			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
